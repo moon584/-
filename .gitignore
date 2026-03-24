@@ -1,0 +1,30 @@
+# Python cache
+__pycache__/
+*.py[cod]
+
+# Virtual environments
+.venv/
+venv/
+ENV/
+
+# Environment variables and secrets
+.env
+.env.*
+*.env
+
+# Test artifacts
+.pytest_cache/
+.coverage
+htmlcov/
+
+# IDE / tooling
+.vscode/
+.idea/
+*.swp
+
+# Logs and temp files
+*.log
+*.tmp
+.DS_Store
+Thumbs.db
+
