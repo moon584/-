@@ -42,6 +42,14 @@ class BaseProvider:
     def detail_headers(self) -> Optional[Dict[str, str]]:
         return None
 
+    def warmup_urls(self) -> List[str]:
+        """返回预热URL列表，用于请求前建立会话（如站点种cookie）。"""
+
+        return []
+
+    def warmup_headers(self) -> Optional[Dict[str, str]]:
+        return None
+
     # ---- 列表阶段 ----
     def build_list_params(self, category_id: str, page: int) -> Dict[str, Any]:
         """构造列表接口参数，默认直接沿用 rule 中的默认值。"""
@@ -62,6 +70,11 @@ class BaseProvider:
 
         raise NotImplementedError
 
+    def predict_job_url(self, post: Dict[str, Any]) -> Optional[str]:
+        """根据列表数据预估 job_url；默认不支持。"""
+
+        return None
+
     # ---- 详情阶段 ----
     def build_detail_params(self, post_id: str) -> Dict[str, Any]:
         params = dict(self.detail_endpoint.default_params)
@@ -78,4 +91,15 @@ class BaseProvider:
         """将详情 JSON 转为 JobRecord，由各官网自行实现映射逻辑。"""
 
         raise NotImplementedError
+
+    # ---- 自动分类扩展 ----
+    def supports_auto_category(self) -> bool:
+        """是否支持基于 JSON 自动推断分类。默认关闭。"""
+
+        return False
+
+    def resolve_category_id(self, post: Dict[str, Any], detail: Dict[str, Any]) -> Optional[str]:
+        """根据岗位 JSON 解析数据库分类ID；默认不覆盖。"""
+
+        return None
 

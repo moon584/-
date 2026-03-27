@@ -46,7 +46,23 @@
           "list_headers": { "$ref": "#/definitions/headerMap" },
           "detail_headers": { "$ref": "#/definitions/headerMap" },
           "default_category_id": { "type": "string" },
-          "default_api_category_id": { "type": "string" }
+          "default_api_category_id": { "type": "string" },
+          "skip_detail_if_exists": { "type": "boolean" },
+          "job_type_overrides": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "object",
+              "properties": {
+                "list_api": { "$ref": "#/definitions/apiEndpoint" },
+                "detail_api": { "$ref": "#/definitions/apiEndpoint" },
+                "extra": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              },
+              "additionalProperties": false
+            }
+          }
         },
         "additionalProperties": true
       }
@@ -63,6 +79,11 @@
           "minLength": 1,
           "pattern": "^https?://"
         },
+        "method": {
+          "type": "string",
+          "enum": ["GET", "POST", "PUT", "DELETE", "PATCH"],
+          "default": "GET"
+        },
         "default_params": {
           "type": "object",
           "default": {},
@@ -76,6 +97,10 @@
       "properties": {
         "code_field": { "type": ["string", "null"] },
         "success_value": { "type": ["string", "number", "integer", "boolean", "null"] },
+        "success_values": {
+          "type": ["array", "null"],
+          "items": { "type": ["string", "number", "integer", "boolean", "null"] }
+        },
         "data_path": { "type": ["string", "null"] },
         "posts_path": { "type": ["string", "null"] },
         "count_path": { "type": ["string", "null"] },
@@ -94,4 +119,3 @@
     }
   }
 }
-

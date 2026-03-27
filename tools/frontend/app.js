@@ -30,6 +30,8 @@ const SAMPLE_RULE_TEMPLATE = {
   },
   extra: {
     default_category_id: "CXXXDEFAULT",
+    default_api_category_id: "40001001",
+    auto_category_mode: false,
     field_map: {
       job_url: "detail.url",
       title: "detail.title",
@@ -64,7 +66,66 @@ const SAMPLE_RULE_TEMPLATE = {
       success_value: 0,
       data_path: "data",
     },
+    job_type_overrides: {
+      "0": {},
+      "1": {},
+    },
   },
+};
+
+const elements = {
+  list: document.getElementById("rule-list"),
+  search: document.getElementById("search"),
+  add: document.getElementById("add-btn"),
+  delete: document.getElementById("delete-btn"),
+  save: document.getElementById("save-btn"),
+  reload: document.getElementById("reload-btn"),
+  toast: document.getElementById("toast"),
+  validation: document.getElementById("validation"),
+  fields: {
+    companyId: document.getElementById("company-id"),
+    companyName: document.getElementById("company-name"),
+    provider: document.getElementById("provider"),
+    listUrl: document.getElementById("list-url"),
+    detailUrl: document.getElementById("detail-url"),
+    defaultCategory: document.getElementById("default-category"),
+    crawlerMode: document.getElementById("crawler-mode"),
+    listParams: document.getElementById("list-params"),
+    detailParams: document.getElementById("detail-params"),
+    fieldMap: document.getElementById("field-map"),
+    defaultValues: document.getElementById("default-values"),
+    extraList: document.getElementById("extra-list"),
+    extraDetail: document.getElementById("extra-detail"),
+    extraHeaders: document.getElementById("extra-headers"),
+    extraListHeaders: document.getElementById("extra-list-headers"),
+    extraDetailHeaders: document.getElementById("extra-detail-headers"),
+    socialOverride: document.getElementById("social-override"),
+    campusOverride: document.getElementById("campus-override"),
+  },
+};
+
+function normalizeJobTypeOverrides(overrides) {
+  const normalized = {
+    "0": {},
+    "1": {},
+  };
+  if (!overrides || typeof overrides !== "object") {
+    return normalized;
+  }
+  if (overrides["0"] && typeof overrides["0"] === "object") {
+    normalized["0"] = overrides["0"];
+  }
+  if (overrides["1"] && typeof overrides["1"] === "object") {
+    normalized["1"] = overrides["1"];
+  }
+  return normalized;
+}
+
+const state = {
+  rules: [],
+  filteredIndexes: [],
+  activeIndex: null,
+  sampleTemplate: null,
 };
 
 function autoResize(textarea) {
@@ -98,6 +159,7 @@ function loadRuleIntoForm(rule) {
   fields.listUrl.value = rule.list_api?.url ?? "";
   fields.detailUrl.value = rule.detail_api?.url ?? "";
   fields.defaultCategory.value = rule.extra?.default_category_id ?? "";
+  fields.crawlerMode.value = rule.extra?.auto_category_mode ? "auto" : "standard";
   fields.listParams.value = formatJson(rule.list_api?.default_params ?? {});
   fields.detailParams.value = formatJson(rule.detail_api?.default_params ?? {});
   fields.fieldMap.value = formatJson(rule.extra?.field_map ?? {});
@@ -107,6 +169,9 @@ function loadRuleIntoForm(rule) {
   fields.extraHeaders.value = rule.extra?.headers ? formatJson(rule.extra.headers) : "";
   fields.extraListHeaders.value = rule.extra?.list_headers ? formatJson(rule.extra.list_headers) : "";
   fields.extraDetailHeaders.value = rule.extra?.detail_headers ? formatJson(rule.extra.detail_headers) : "";
+  const overrides = normalizeJobTypeOverrides(rule.extra?.job_type_overrides);
+  fields.socialOverride.value = formatJson(overrides["0"]);
+  fields.campusOverride.value = formatJson(overrides["1"]);
   Object.values(fields).forEach((input) => {
     if (input && input.tagName === "TEXTAREA") {
       autoResize(input);
@@ -155,6 +220,9 @@ function extractForm() {
     field_map: parseJsonField(fields.fieldMap.value, "extra.field_map") ?? {},
     default_values: parseJsonField(fields.defaultValues.value, "extra.default_values") ?? {},
   };
+  if (fields.crawlerMode.value === "auto") {
+    extra.auto_category_mode = true;
+  }
   const optional = [
     ["list", fields.extraList],
     ["detail", fields.extraDetail],
@@ -168,6 +236,18 @@ function extractForm() {
       extra[key] = value;
     }
   });
+  const socialOverride = parseJsonField(fields.socialOverride.value, "extra.job_type_overrides.0") ?? {};
+  const campusOverride = parseJsonField(fields.campusOverride.value, "extra.job_type_overrides.1") ?? {};
+  if (typeof socialOverride !== "object" || Array.isArray(socialOverride)) {
+    throw new Error("extra.job_type_overrides.0 必须是 JSON 对象");
+  }
+  if (typeof campusOverride !== "object" || Array.isArray(campusOverride)) {
+    throw new Error("extra.job_type_overrides.1 必须是 JSON 对象");
+  }
+  extra.job_type_overrides = {
+    "0": socialOverride,
+    "1": campusOverride,
+  };
   return {
     company_id,
     company_name,
@@ -246,6 +326,9 @@ function clearForm() {
       autoResize(input);
     }
   });
+  if (elements.fields.crawlerMode) {
+    elements.fields.crawlerMode.value = "standard";
+  }
 }
 
 async function fetchRules() {

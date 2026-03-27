@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 import logging
-from typing import Dict, Iterator, List, Optional
+from typing import Dict, Iterable, Iterator, List, Optional, Set
 
 import pymysql
 from pymysql.cursors import DictCursor
@@ -94,6 +94,41 @@ class Database:
             row = cur.fetchone()
         return row
 
+    def fetch_category_ids(self, company_id: str) -> Set[str]:
+        """返回公司下所有分类ID（不要求 categoryid 字段）."""
+        with self.cursor() as cur:
+            cur.execute("SELECT id FROM category WHERE id LIKE %s", (f"{company_id}%",))
+            rows = cur.fetchall()
+        return {str(row["id"]) for row in rows if row.get("id")}
+
+    def ensure_categories_exist(self, company_id: str, category_ids: Iterable[str]) -> List[str]:
+        """批量创建缺失分类，返回本次新增的分类ID列表。"""
+        normalized_ids = []
+        seen: Set[str] = set()
+        for raw in category_ids:
+            cid = str(raw).strip()
+            if not cid or cid in seen:
+                continue
+            seen.add(cid)
+            normalized_ids.append(cid)
+        if not normalized_ids:
+            return []
+
+        existing_ids = self.fetch_category_ids(company_id)
+        missing_ids = [cid for cid in normalized_ids if cid not in existing_ids]
+        if not missing_ids:
+            return []
+
+        with self.cursor() as cur:
+            for category_id in missing_ids:
+                # 自动补齐一级分类节点，名称先使用ID，后续可在管理端调整。
+                cur.execute(
+                    "INSERT INTO category (id, name, parent_id, level, categoryid) VALUES (%s, %s, %s, %s, %s)",
+                    (category_id, category_id, company_id, 0, None),
+                )
+        self._ensure_connection().commit()
+        return missing_ids
+
     def generate_next_job_id(self, company_id: str) -> str:
         with self.cursor() as cur:
             cur.execute(
@@ -160,6 +195,62 @@ class Database:
             deleted = cur.rowcount or 0
         self._ensure_connection().commit()
         return deleted
+
+    def mark_jobs_deleted_by_category(self, category_id: str) -> int:
+        """慢爬准备阶段：先将分类下职位标记为待删除。"""
+        with self.cursor() as cur:
+            cur.execute("UPDATE job SET is_deleted=1 WHERE category_id=%s", (category_id,))
+            affected = cur.rowcount or 0
+        self._ensure_connection().commit()
+        return affected
+
+    def mark_jobs_deleted_by_company(self, company_id: str) -> int:
+        """慢爬自动分类准备阶段：先将公司下职位标记为待删除。"""
+        with self.cursor() as cur:
+            cur.execute("UPDATE job SET is_deleted=1 WHERE company_id=%s", (company_id,))
+            affected = cur.rowcount or 0
+        self._ensure_connection().commit()
+        return affected
+
+    def touch_job_alive_by_url(self, job_url: str) -> bool:
+        """命中列表中的岗位即视为存活，取消待删除标记。"""
+        with self.cursor() as cur:
+            cur.execute("UPDATE job SET is_deleted=0 WHERE job_url=%s", (job_url,))
+            affected = cur.rowcount or 0
+        self._ensure_connection().commit()
+        return affected > 0
+
+    def purge_deleted_jobs_by_category(self, category_id: str) -> int:
+        """慢爬收尾：删除仍处于待删除标记的职位。"""
+        with self.cursor() as cur:
+            cur.execute("DELETE FROM job WHERE category_id=%s AND is_deleted=1", (category_id,))
+            deleted = cur.rowcount or 0
+        self._ensure_connection().commit()
+        return deleted
+
+    def purge_deleted_jobs_by_company(self, company_id: str) -> int:
+        """慢爬自动分类收尾：删除公司下仍处于待删除标记的职位。"""
+        with self.cursor() as cur:
+            cur.execute("DELETE FROM job WHERE company_id=%s AND is_deleted=1", (company_id,))
+            deleted = cur.rowcount or 0
+        self._ensure_connection().commit()
+        return deleted
+
+    def clear_deleted_marks_by_category(self, category_id: str) -> int:
+        """慢爬异常回滚：取消分类下待删除标记，避免误删。"""
+        with self.cursor() as cur:
+            cur.execute("UPDATE job SET is_deleted=0 WHERE category_id=%s AND is_deleted=1", (category_id,))
+            affected = cur.rowcount or 0
+        self._ensure_connection().commit()
+        return affected
+
+    def clear_deleted_marks_by_company(self, company_id: str) -> int:
+        """慢爬异常回滚：取消公司下待删除标记，避免误删。"""
+        with self.cursor() as cur:
+            cur.execute("UPDATE job SET is_deleted=0 WHERE company_id=%s AND is_deleted=1", (company_id,))
+            affected = cur.rowcount or 0
+        self._ensure_connection().commit()
+        return affected
 
     def sync_category_counts(self, category_id: str, official_total: Optional[int] = None) -> int:
         """同步分类的爬取/官网职位数量，返回最新 crawled 数量。"""

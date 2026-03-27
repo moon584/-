@@ -1,7 +1,12 @@
 from __future__ import annotations
 
+from collections import defaultdict
 from datetime import datetime
 import logging
+import os
+import threading
+import time
+import sys
 from typing import Dict, List, Optional
 
 from .db import Database
@@ -21,14 +26,30 @@ class JobCrawler:
         provider: BaseProvider,
         job_type: int,
         *,
+        crawl_mode: str = "fast",
         dry_run: bool = False,
     ) -> None:
         self._db = db
         self._http = http_client
         self._provider = provider
         self._job_type = job_type
+        normalized_mode = str(crawl_mode).strip().lower()
+        if normalized_mode not in {"fast", "slow"}:
+            raise ValueError(f"Unsupported crawl_mode: {crawl_mode}")
+        self._crawl_mode = normalized_mode
         self._dry_run = dry_run
+        extra_cfg = getattr(provider, "extra", {}) or {}
+        raw_skip = extra_cfg.get("skip_detail_if_exists") if isinstance(extra_cfg, dict) else None
+        self._skip_detail_if_exists = raw_skip if isinstance(raw_skip, bool) else True
         self._stats: Optional[CrawlStats] = None
+        self._warmup_done = False
+        self._quit_requested = False
+        self._quit_listener_thread: Optional[threading.Thread] = None
+        self._quit_listener_shutdown = threading.Event()
+
+    @property
+    def _is_slow_mode(self) -> bool:
+        return self._crawl_mode == "slow"
 
     def run(
         self,
@@ -36,51 +57,200 @@ class JobCrawler:
         post_limit: Optional[int] = None,
     ) -> CrawlStats:
         """执行爬取，支持指定分类和条数限制（中文注释）。"""
+        self._start_quit_listener()
+        try:
+            if self._provider.supports_auto_category():
+                if target_categories:
+                    logging.info("自动分类模式会忽略手动指定的分类：%s", ", ".join(target_categories))
+                return self._run_auto_category(post_limit)
+            stats = CrawlStats()
+            self._stats = stats
+            category_mappings = self._resolve_category_mappings(target_categories)
+            if not category_mappings:
+                logging.warning("指定的分类未找到或没有可爬取的叶子节点")
+                return stats
+            for mapping in category_mappings:
+                if self._check_quit_requested():
+                    break
+                if not self._is_slow_mode and self._should_skip_category(mapping):
+                    stats.record_category(mapping.db_category_id, 0)
+                    continue
+                api_category_id = mapping.api_category_id or ""
+                logging.info(
+                    "开始抓取分类 %s（接口ID=%s，条数限制=%s）",
+                    mapping.db_category_id,
+                    mapping.api_category_id or "-",
+                    post_limit or "all",
+                )
+                official_total: Optional[int] = None
+                list_failed = False
+                if self._is_slow_mode:
+                    self._prepare_slow_category(mapping.db_category_id)
+                try:
+                    previous_list_failures = stats.list_failures
+                    posts = self._fetch_posts(api_category_id, post_limit)
+                    list_failed = stats.list_failures > previous_list_failures
+                    official_total = len(posts)
+                    if not self._is_slow_mode:
+                        self._handle_category_gap(mapping.db_category_id, official_total)
+                    stats.record_category(mapping.db_category_id, official_total)
+                    for post in posts:
+                        if self._check_quit_requested():
+                            break
+                        existing_job_url = self._find_existing_job_url_by_post(post)
+                        if existing_job_url:
+                            if self._is_slow_mode:
+                                self._touch_existing_job(existing_job_url)
+                            stats.record_skip_existing()
+                            continue
+                        post_id = self._provider.extract_post_id(post)
+                        if not post_id:
+                            stats.record_failure()
+                            logging.warning("跳过缺少PostId的岗位：%s", post)
+                            continue
+                        try:
+                            detail = self._fetch_detail(post_id)
+                            record = self._build_job_record(mapping.db_category_id, detail)
+                            inserted = self._persist_record(record)
+                            if inserted:
+                                stats.record_success()
+                            else:
+                                if self._is_slow_mode:
+                                    self._touch_existing_job(record.job_url)
+                                stats.record_skip_existing()
+                        except Exception:
+                            stats.record_failure()
+                            logging.exception("抓取岗位 %s 失败", post_id)
+                finally:
+                    if self._is_slow_mode:
+                        self._finalize_slow_category(mapping.db_category_id, list_failed)
+                    self._refresh_category_counts(mapping.db_category_id, official_total)
+            logging.info(
+                "分类抓取完成：共处理%s条，成功%s条，失败%s条，跳过%s条",
+                stats.total_posts,
+                stats.success,
+                stats.failed,
+                stats.skipped_existing,
+            )
+            logging.info("各分类抓取数量：%s", stats.per_category)
+            logging.info(
+                "HTTP 请求统计：列表失败 %s 次，详情失败 %s 次",
+                stats.list_failures,
+                stats.detail_failures,
+            )
+            return stats
+        finally:
+            self._stop_quit_listener()
+
+    def _run_auto_category(self, post_limit: Optional[int]) -> CrawlStats:
         stats = CrawlStats()
         self._stats = stats
-        category_mappings = self._resolve_category_mappings(target_categories)
-        if not category_mappings:
-            logging.warning("指定的分类未找到或没有可爬取的叶子节点")
-            return stats
-        for mapping in category_mappings:
-            if self._should_skip_category(mapping):
-                stats.record_category(mapping.db_category_id, 0)
-                continue
-            api_category_id = mapping.api_category_id or ""
-            logging.info(
-                "开始抓取分类 %s（接口ID=%s，条数限制=%s）",
-                mapping.db_category_id,
-                mapping.api_category_id or "-",
-                post_limit or "all",
-            )
-            official_total: Optional[int] = None
-            try:
-                posts = self._fetch_posts(api_category_id, post_limit)
-                official_total = len(posts)
-                self._handle_category_gap(mapping.db_category_id, official_total)
-                stats.record_category(mapping.db_category_id, official_total)
-                for post in posts:
-                    post_id = self._provider.extract_post_id(post)
-                    if not post_id:
-                        stats.record_failure()
-                        logging.warning("跳过缺少PostId的岗位：%s", post)
-                        continue
-                    try:
-                        detail = self._fetch_detail(post_id)
-                        record = self._build_job_record(mapping.db_category_id, detail)
-                        self._persist_record(record)
-                        stats.record_success()
-                    except Exception:
-                        stats.record_failure()
-                        logging.exception("抓取岗位 %s 失败", post_id)
-            finally:
-                self._refresh_category_counts(mapping.db_category_id, official_total)
+        extra_cfg = getattr(self._provider, "extra", {}) or {}
+        default_mapping = self._build_default_mapping(extra_cfg)
+        if not default_mapping:
+            raise ValueError("自动分类模式需要在规则中配置 default_category_id 与 default_api_category_id")
+        default_category_id = default_mapping.db_category_id
+        if not default_category_id:
+            raise ValueError("自动分类模式缺少 default_category_id 配置")
+        required_category_ids = self._collect_auto_category_ids(
+            extra_cfg,
+            self._provider.company_id,
+            default_category_id,
+        )
+        created = self._db.ensure_categories_exist(self._provider.company_id, required_category_ids)
+        if created:
+            logging.info("自动补齐缺失分类：%s", ", ".join(created))
+        base_api_category = default_mapping.api_category_id or ""
         logging.info(
-            "分类抓取完成：共处理%s条，成功%s条，失败%s条，跳过%s条",
+            "自动分类模式：使用 API 分类 %s 请求列表接口（limit=%s）",
+            default_mapping.api_category_id or "-",
+            post_limit or "all",
+        )
+        list_failed = False
+        if self._is_slow_mode:
+            self._prepare_slow_company()
+        previous_list_failures = stats.list_failures
+        posts = self._fetch_posts(base_api_category, post_limit)
+        list_failed = stats.list_failures > previous_list_failures
+        logging.info("全量列表抓取完成，共 %s 条", len(posts))
+        known_category_ids = self._db.fetch_category_ids(self._provider.company_id)
+        if default_category_id not in known_category_ids:
+            raise ValueError(
+                "自动分类模式要求数据库已存在 default_category_id=%s 的分类记录" % default_category_id
+            )
+        category_totals: Dict[str, int] = defaultdict(int)
+        category_hit_stats: Dict[str, int] = defaultdict(int)
+        default_category_hits = 0
+        unknown_category_hits = 0
+        for post in posts:
+            if self._check_quit_requested():
+                break
+            existing_job_url = self._find_existing_job_url_by_post(post)
+            if existing_job_url:
+                if self._is_slow_mode:
+                    self._touch_existing_job(existing_job_url)
+                stats.record_skip_existing()
+                continue
+            post_id = self._provider.extract_post_id(post)
+            if not post_id:
+                stats.record_failure()
+                logging.warning("跳过缺少PostId的岗位：%s", post)
+                continue
+            try:
+                detail = self._fetch_detail(post_id)
+            except Exception:
+                stats.record_failure()
+                logging.exception("岗位 %s 详情请求失败", post_id)
+                continue
+            resolved_category = self._provider.resolve_category_id(post, detail)
+            if resolved_category:
+                target_category = resolved_category
+            else:
+                target_category = default_category_id
+                default_category_hits += 1
+            category_hit_stats[target_category] += 1
+            if target_category not in known_category_ids:
+                unknown_category_hits += 1
+                logging.warning(
+                    "岗位 %s 映射到未知分类 %s，已跳过；请确保数据库存在该分类", post_id, target_category
+                )
+                stats.record_failure()
+                continue
+            try:
+                record = self._build_job_record(target_category, detail)
+                inserted = self._persist_record(record)
+                if inserted:
+                    category_totals[target_category] += 1
+                    stats.record_category(target_category, 1)
+                    stats.record_success()
+                else:
+                    if self._is_slow_mode:
+                        self._touch_existing_job(record.job_url)
+                    stats.record_skip_existing()
+            except Exception:
+                stats.record_failure()
+                logging.exception("写入岗位 %s 失败", post_id)
+        if self._is_slow_mode:
+            self._finalize_slow_company(list_failed)
+            for category_id in known_category_ids:
+                self._refresh_category_counts(category_id, official_total=None)
+        else:
+            for category_id, total in category_totals.items():
+                try:
+                    self._handle_category_gap(category_id, official_total=total)
+                finally:
+                    self._refresh_category_counts(category_id, official_total=total)
+        logging.info(
+            "自动分类模式完成：共处理 %s 条岗位，成功 %s 条，失败 %s 条",
             stats.total_posts,
             stats.success,
             stats.failed,
-            stats.skipped_existing,
+        )
+        logging.info(
+            "自动分类命中统计：%s（默认分类命中=%s，未知分类命中=%s）",
+            dict(sorted(category_hit_stats.items())),
+            default_category_hits,
+            unknown_category_hits,
         )
         logging.info("各分类抓取数量：%s", stats.per_category)
         logging.info(
@@ -89,6 +259,30 @@ class JobCrawler:
             stats.detail_failures,
         )
         return stats
+
+    @staticmethod
+    def _collect_auto_category_ids(
+        extra_cfg: Dict[str, object], company_id: str, default_category_id: str
+    ) -> List[str]:
+        category_ids = [default_category_id]
+        category_rules = extra_cfg.get("category_rules")
+        if isinstance(category_rules, list):
+            for item in category_rules:
+                if not isinstance(item, dict):
+                    continue
+                candidate = str(item.get("category_id", "")).strip()
+                if not candidate:
+                    continue
+                if not candidate.startswith(company_id):
+                    logging.warning(
+                        "自动分类规则 category_id=%s 不属于公司 %s，已忽略",
+                        candidate,
+                        company_id,
+                    )
+                    continue
+                if candidate:
+                    category_ids.append(candidate)
+        return category_ids
 
     def _resolve_category_mappings(
         self, target_categories: Optional[List[str]]
@@ -180,10 +374,14 @@ class JobCrawler:
         )
 
     def _fetch_posts(self, category_id: str, post_limit: Optional[int]) -> List[Dict[str, object]]:
+        self._run_warmup_once()
         posts: List[Dict[str, object]] = []
         page = 1
         while True:
+            if self._check_quit_requested():
+                break
             payload = self._provider.build_list_params(category_id, page)
+            logging.debug("列表请求参数：category=%s page=%s payload=%s", category_id or "-", page, payload)
             try:
                 response = self._http.fetch_json(
                     self._provider.list_endpoint,
@@ -208,10 +406,69 @@ class JobCrawler:
             if post_limit and len(posts) >= post_limit:
                 posts = posts[:post_limit]
                 break
+            if self._check_quit_requested():
+                break
             if not list_result.has_more:
                 break
             page += 1
         return posts
+
+    def _start_quit_listener(self) -> None:
+        self._quit_requested = False
+        self._quit_listener_shutdown.clear()
+        if os.name != "nt":
+            return
+        if not hasattr(sys.stdin, "isatty") or not sys.stdin.isatty():
+            return
+        if self._quit_listener_thread and self._quit_listener_thread.is_alive():
+            return
+        self._quit_listener_thread = threading.Thread(target=self._listen_quit_key_windows, daemon=True)
+        self._quit_listener_thread.start()
+        logging.info("爬取中可按 q 提前退出并直接结算当前结果。")
+
+    def _stop_quit_listener(self) -> None:
+        self._quit_listener_shutdown.set()
+        if self._quit_listener_thread and self._quit_listener_thread.is_alive():
+            self._quit_listener_thread.join(timeout=0.3)
+        self._quit_listener_thread = None
+
+    def _listen_quit_key_windows(self) -> None:
+        try:
+            import msvcrt  # type: ignore
+        except Exception:
+            return
+        while not self._quit_listener_shutdown.is_set():
+            try:
+                if msvcrt.kbhit():
+                    key = msvcrt.getwch()
+                    if key and key.lower() == "q":
+                        self._quit_requested = True
+                        logging.warning("检测到 q，准备提前结束本轮爬取并结算。")
+                        break
+            except Exception:
+                break
+            time.sleep(0.05)
+
+    def _check_quit_requested(self) -> bool:
+        return self._quit_requested
+
+    def _run_warmup_once(self) -> None:
+        if self._warmup_done:
+            return
+        provider_warmup = getattr(self._provider, "warmup_urls", None)
+        warmup_urls = provider_warmup() if callable(provider_warmup) else []
+        if not warmup_urls:
+            self._warmup_done = True
+            return
+        provider_headers = getattr(self._provider, "warmup_headers", None)
+        headers = provider_headers() if callable(provider_headers) else None
+        for url in warmup_urls:
+            try:
+                logging.info("预热会话：%s", url)
+                self._http.warmup(url, headers=headers)
+            except Exception:
+                logging.warning("会话预热失败，继续尝试抓取：%s", url, exc_info=True)
+        self._warmup_done = True
 
     def _fetch_detail(self, post_id: str) -> Dict[str, object]:
         payload = self._provider.build_detail_params(post_id)
@@ -227,37 +484,85 @@ class JobCrawler:
             raise
         return self._provider.parse_detail_response(response)
 
+    def _find_existing_job_url_by_post(self, post: Dict[str, object]) -> Optional[str]:
+        if not self._is_slow_mode and not self._skip_detail_if_exists:
+            return None
+        predictor = getattr(self._provider, "predict_job_url", None)
+        if not callable(predictor):
+            return None
+        job_url = predictor(post)
+        if not job_url:
+            return None
+        existing = self._db.fetch_job_by_url(job_url)
+        if not existing:
+            return None
+        logging.info("列表命中已存在职位，详情前跳过：%s", job_url)
+        return job_url
+
+    def _prepare_slow_category(self, category_id: str) -> None:
+        if self._dry_run:
+            logging.info("[DRY-RUN] 慢爬预标记分类 %s 的职位为待删除", category_id)
+            return
+        affected = self._db.mark_jobs_deleted_by_category(category_id)
+        logging.info("慢爬预标记完成：分类 %s 共标记 %s 条", category_id, affected)
+
+    def _finalize_slow_category(self, category_id: str, list_failed: bool) -> None:
+        if self._dry_run:
+            logging.info("[DRY-RUN] 慢爬收尾跳过分类 %s 的删除阶段", category_id)
+            return
+        if list_failed:
+            restored = self._db.clear_deleted_marks_by_category(category_id)
+            logging.warning("分类 %s 列表请求异常，已撤销 %s 条待删除标记", category_id, restored)
+            return
+        deleted = self._db.purge_deleted_jobs_by_category(category_id)
+        logging.info("慢爬收尾删除完成：分类 %s 删除 %s 条", category_id, deleted)
+
+    def _prepare_slow_company(self) -> None:
+        if self._dry_run:
+            logging.info("[DRY-RUN] 慢爬预标记公司 %s 的职位为待删除", self._provider.company_id)
+            return
+        affected = self._db.mark_jobs_deleted_by_company(self._provider.company_id)
+        logging.info("慢爬预标记完成：公司 %s 共标记 %s 条", self._provider.company_id, affected)
+
+    def _finalize_slow_company(self, list_failed: bool) -> None:
+        if self._dry_run:
+            logging.info("[DRY-RUN] 慢爬收尾跳过公司 %s 的删除阶段", self._provider.company_id)
+            return
+        if list_failed:
+            restored = self._db.clear_deleted_marks_by_company(self._provider.company_id)
+            logging.warning("公司 %s 列表请求异常，已撤销 %s 条待删除标记", self._provider.company_id, restored)
+            return
+        deleted = self._db.purge_deleted_jobs_by_company(self._provider.company_id)
+        logging.info("慢爬收尾删除完成：公司 %s 删除 %s 条", self._provider.company_id, deleted)
+
+    def _touch_existing_job(self, job_url: str) -> None:
+        if self._dry_run:
+            return
+        touched = self._db.touch_job_alive_by_url(job_url)
+        if not touched:
+            logging.debug("未找到可复活的已存在岗位：%s", job_url)
+
     def _build_job_record(self, category_id: str, detail: Dict[str, object]) -> JobRecord:
         crawled_at = datetime.utcnow()
         record = self._provider.build_job_record(category_id, detail, crawled_at=crawled_at)
         record.job_type = self._job_type
         return record
 
-    def _persist_record(self, record: JobRecord) -> None:
+    def _persist_record(self, record: JobRecord) -> bool:
         if self._dry_run:
             logging.info("[DRY-RUN] Would upsert job: %s", record.job_url)
-            return
+            return True
         existing = self._db.fetch_job_by_url(record.job_url)
-        if not existing:
-            record.id = self._db.generate_next_job_id(self._provider.company_id)
-            record.created_at = record.crawled_at
-            self._db.insert_job(record.as_sql_params())
-            logging.info("新增职位 %s", record.id)
-            return
-        record.id = existing["id"]
-        changes = self._compute_changes(existing, record)
-        metadata_changes = {
-            "crawl_status": record.crawl_status,
-            "crawled_at": record.crawled_at,
-        }
-        for key, value in metadata_changes.items():
-            if existing.get(key) != value:
-                changes[key] = value
-        if changes:
-            self._db.update_job(record.id, changes)
-            logging.info("更新职位 %s", record.id)
-        else:
-            logging.debug("职位 %s 未发生变化，跳过更新", record.id)
+        if existing:
+            if self._is_slow_mode:
+                self._touch_existing_job(record.job_url)
+            logging.info("职位已存在，按 job_url 跳过：%s", record.job_url)
+            return False
+        record.id = self._db.generate_next_job_id(self._provider.company_id)
+        record.created_at = record.crawled_at
+        self._db.insert_job(record.as_sql_params())
+        logging.info("新增职位 %s", record.id)
+        return True
 
     def _compute_changes(self, existing: Dict[str, object], record: JobRecord) -> Dict[str, object]:
         new_values = record.as_sql_params()

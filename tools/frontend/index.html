@@ -49,6 +49,13 @@
           <label for="default-category">default_category_id</label>
           <input id="default-category" type="text" />
         </div>
+        <div class="field">
+          <label for="crawler-mode">爬虫模式</label>
+          <select id="crawler-mode">
+            <option value="standard">按分类请求（默认）</option>
+            <option value="auto">自动分类（单列表+规则映射）</option>
+          </select>
+        </div>
         <div class="grid">
           <div class="field">
             <label for="list-params">list_api.default_params (JSON)</label>
@@ -88,6 +95,16 @@
         <div class="field">
           <label for="extra-detail-headers">extra.detail_headers (JSON，可选)</label>
           <textarea id="extra-detail-headers" rows="4"></textarea>
+        </div>
+        <div class="grid">
+          <div class="field">
+            <label for="social-override">extra.job_type_overrides.0 社会招聘 (JSON，留空即 {})</label>
+            <textarea id="social-override" rows="6"></textarea>
+          </div>
+          <div class="field">
+            <label for="campus-override">extra.job_type_overrides.1 校园招聘 (JSON，留空即 {})</label>
+            <textarea id="campus-override" rows="6"></textarea>
+          </div>
         </div>
         <div id="validation" class="validation"></div>
       </section>

@@ -1,9 +1,10 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+from copy import deepcopy
 import json
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 
 @dataclass(slots=True)
@@ -12,6 +13,7 @@ class APIEndpoint:
 
     url: str
     default_params: Dict[str, Any]
+    method: str = "GET"
 
 
 @dataclass(slots=True)
@@ -66,3 +68,45 @@ def load_rule_file(path: str, company_id: str) -> CompanyRule:
             extra=item.get("extra", {}),
         )
     raise ValueError(f"规则文件 {path} 中找不到 company_id={company_id} 的配置")
+
+
+def apply_job_type_overrides(rule: CompanyRule, job_type: int) -> CompanyRule:
+    overrides = rule.extra.get("job_type_overrides") if isinstance(rule.extra, dict) else None
+    if not isinstance(overrides, dict):
+        return rule
+    variant = overrides.get(str(job_type))
+    if not isinstance(variant, dict):
+        return rule
+    new_list = _merge_endpoint(rule.list_api, variant.get("list_api"))
+    new_detail = _merge_endpoint(rule.detail_api, variant.get("detail_api"))
+    new_extra = _merge_dict(rule.extra, variant.get("extra"))
+    return replace(rule, list_api=new_list, detail_api=new_detail, extra=new_extra)
+
+
+def _merge_endpoint(base: APIEndpoint, override: Optional[Dict[str, Any]]) -> APIEndpoint:
+    if not isinstance(override, dict):
+        return base
+    url = override.get("url", base.url)
+    method = override.get("method", base.method)
+    default_params = dict(base.default_params)
+    override_params = override.get("default_params")
+    if isinstance(override_params, dict):
+        default_params.update(override_params)
+    return APIEndpoint(url=url, default_params=default_params, method=method)
+
+
+def _merge_dict(base: Dict[str, Any], patch: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    merged = deepcopy(base)
+    if not isinstance(patch, dict):
+        return merged
+
+    def _apply(target: Dict[str, Any], source: Dict[str, Any]) -> None:
+        for key, value in source.items():
+            if isinstance(value, dict) and isinstance(target.get(key), dict):
+                _apply(target[key], value)
+            else:
+                target[key] = value
+
+    _apply(merged, patch)
+    return merged
+

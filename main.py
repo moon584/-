@@ -10,7 +10,7 @@ from crawler.config import Settings
 from crawler.db import Database
 from crawler.http import HttpClient
 from crawler.providers import load_provider
-from crawler.rules import load_rule_file
+from crawler.rules import load_rule_file, apply_job_type_overrides
 from crawler.service import JobCrawler
 
 
@@ -50,6 +50,15 @@ def prompt_job_type() -> int:
         print("输入无效，仅支持 0 或 1。")
 
 
+def prompt_crawl_mode() -> str:
+    message = "请选择爬取模式（fast=快爬，slow=慢爬）："
+    while True:
+        raw = input(message).strip().lower()
+        if raw in {"fast", "slow"}:
+            return raw
+        print("输入无效，仅支持 fast 或 slow。")
+
+
 def prompt_category_ids() -> Optional[List[str]]:
     """询问用户要爬取的分类ID（中文注释）。"""
     while True:
@@ -82,16 +91,19 @@ def main() -> None:
     settings = Settings.from_env(args.env_file)
     company_id = prompt_company_id()
     rule = load_rule_file(args.rules, company_id)
+    job_type = prompt_job_type()
+    crawl_mode = prompt_crawl_mode()
+    rule = apply_job_type_overrides(rule, job_type)
     database = Database(settings)
     http_client = HttpClient(rule.throttle)
     provider_name = args.provider or rule.provider
     provider = load_provider(provider_name, rule)
-    job_type = prompt_job_type()
     crawler = JobCrawler(
         database,
         http_client,
         provider,
         job_type=job_type,
+        crawl_mode=crawl_mode,
         dry_run=args.dry_run,
     )
     category_ids = prompt_category_ids()

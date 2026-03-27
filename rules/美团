@@ -1,4 +1,72 @@
-请求：https://zhaopin.meituan.com/api/official/job/getJobList
+
+请求 URL
+https://zhaopin.meituan.com/api/official/job/getJobList
+请求方法
+POST
+状态代码
+200 OK
+Remote Address
+127.0.0.1:7897
+引用站点策略
+strict-origin-when-cross-origin
+content-encoding
+gzip
+content-type
+application/json;charset=utf-8
+date
+Thu, 26 Mar 2026 04:38:33 GMT
+m-traceid
+-3367338534753981019
+server
+openresty
+vary
+Accept-Encoding
+:authority
+zhaopin.meituan.com
+:method
+POST
+:path
+/api/official/job/getJobList
+:scheme
+https
+accept
+application/json
+accept-encoding
+gzip, deflate, br, zstd
+accept-language
+zh-CN,zh;q=0.9,en;q=0.8,en-GB;q=0.7,en-US;q=0.6
+cache-control
+no-cache
+content-length
+266
+content-type
+application/json
+cookie
+_lxsdk_cuid=19cf6b3d4bac8-0c53547f4a06628-4c657b58-1bcab9-19cf6b3d4bac8; com.sankuai.recruitment.official.website_strategy=; weixinType=1; _lx_utm=utm_source%3Dbing%26utm_medium%3Dorganic; logan_session_token=5navaat7aubm58ypc836; _lxsdk_s=19d2843171c-99-472-05d%7C%7C131
+origin
+https://zhaopin.meituan.com
+pragma
+no-cache
+priority
+u=1, i
+referer
+https://zhaopin.meituan.com/web/social
+sec-ch-ua
+"Chromium";v="146", "Not-A.Brand";v="24", "Microsoft Edge";v="146"
+sec-ch-ua-mobile
+?0
+sec-ch-ua-platform
+"Windows"
+sec-fetch-dest
+empty
+sec-fetch-mode
+cors
+sec-fetch-site
+same-origin
+user-agent
+Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36 Edg/146.0.0.0
+x-requested-with
+XMLHttpRequest
 响应：
 {
     "data": {
@@ -526,12 +594,80 @@
     "message": "成功"
 }
 
-请求：https://zhaopin.meituan.com/api/official/job/getJobDetail
+请求 URL
+https://zhaopin.meituan.com/api/official/job/getJobDetail
+请求方法
+POST
+状态代码
+200 OK
+Remote Address
+127.0.0.1:7897
+引用站点策略
+strict-origin-when-cross-origin
+content-encoding
+gzip
+content-type
+application/json;charset=utf-8
+date
+Thu, 26 Mar 2026 05:28:02 GMT
+m-traceid
+-6119400696066550976
+server
+openresty
+vary
+Accept-Encoding
+:authority
+zhaopin.meituan.com
+:method
+POST
+:path
+/api/official/job/getJobDetail
+:scheme
+https
+accept
+application/json
+accept-encoding
+gzip, deflate, br, zstd
+accept-language
+zh-CN,zh;q=0.9,en;q=0.8,en-GB;q=0.7,en-US;q=0.6
+cache-control
+no-cache
+content-length
+46
+content-type
+application/json
+cookie
+_lxsdk_cuid=19cf6b3d4bac8-0c53547f4a06628-4c657b58-1bcab9-19cf6b3d4bac8; com.sankuai.recruitment.official.website_strategy=; weixinType=1; _lx_utm=utm_source%3Dbing%26utm_medium%3Dorganic; logan_session_token=61zty4fqnp5itpzp3yv2; _lxsdk_s=19d289989e1-ca0-97e-ac9%7C%7C4
+origin
+https://zhaopin.meituan.com
+pragma
+no-cache
+priority
+u=1, i
+referer
+https://zhaopin.meituan.com/web/position/detail?jobUnionId=4285166054&highlightType=social
+sec-ch-ua
+"Chromium";v="146", "Not-A.Brand";v="24", "Microsoft Edge";v="146"
+sec-ch-ua-mobile
+?0
+sec-ch-ua-platform
+"Windows"
+sec-fetch-dest
+empty
+sec-fetch-mode
+cors
+sec-fetch-site
+same-origin
+user-agent
+Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36 Edg/146.0.0.0
+x-requested-with
+XMLHttpRequest
+
 响应：
 {
     "data": {
-        "jobUnionId": "3467972559",
-        "name": "高级测试开发工程师（星级评价质量）",
+        "jobUnionId": "4285166054",
+        "name": "餐饮SaaS高级测试开发工程师",
         "projectId": null,
         "projectName": null,
         "jobType": "3",
@@ -542,8 +678,8 @@
         "jobFamilyGroup": "测试",
         "cityList": [
             {
-                "code": "001009",
-                "name": "上海市",
+                "code": "001023001",
+                "name": "成都市",
                 "children": null,
                 "sort": null,
                 "subCode": null,
@@ -556,7 +692,7 @@
         "department": [
             {
                 "code": null,
-                "name": "核心本地商业-点评事业部",
+                "name": "软硬件服务-软件研发部",
                 "children": null,
                 "sort": null,
                 "subCode": null,
@@ -566,14 +702,14 @@
             }
         ],
         "desc": null,
-        "departmentIntro": "大众点评作为国内重要的本地生活消费决策参考平台，多年来深耕本地生活消费领域，深受广大用户的信任和喜爱。我们的业务覆盖了吃喝玩乐游购娱等生活场景，通过极具辨识度和公信力的”星级“和”评价“产品，为数亿用户提供了全面、可信的消费决策依据。为更好满足用户探索城市的需求，大众点评在原有星级和评价的基础上，以信息流产品形式，助力用户发现更多好去处。大量优秀年轻同学的加入，为我们的团队注入了澎湃活力。我们相信，真实的生活是不可替代的，真实的感受是值得记录的，真实的美好是要被看到的。希望优秀的你能和我们一起，帮助广大用户在大众点评上发现更多好去处，找到属于自己的人间烟火气，共创美好生活。",
-        "jobDuty": "1、负责大众点评APP星级评价业务的质量保障工作；\n2、负责大型项目的测试，梳理业务逻辑、技术架构，提前预判质量风险并制定合适的测试方案 ；\n3、参与团队质量保障体系建设，包括AI智能测试链路搭建、自动化测试、稳定性测试、性能测试、测试平台共建等；\n4、基于团队日常交付痛点问题，在研发流程、质量策略、测试技术等领域进行持续的探索和优化；\n5、输出测试策略，组织技术分享，关注行业前沿技术。",
-        "jobRequirement": "1、本科及其以上学历，计算机及相关专业，三年以上软件测试开发经验，有大型项目经历者优先；\n2、熟练掌握Java语言，熟悉MySQL，熟悉shell及linux操作系统，至少会一种脚本语言：如Python，Ruby，JavaScript；\n3、具有互联网/软件产品的自动化测试设计、测试框架开发，开源工具二次开发、性能工具开发等经验，对业界常见测试工具应用有较好的掌握；\n4、对软件质量保障有体系化的思考和经验，能够面对复杂情况建立体系化的软件质量控制的策略和模型，并具备良好的落地实践；\n5、逻辑能力强，思维活跃，接受新事物能力强，责任心强，积极主动，善于沟通，良好的团队合作能力；\n6、有数据和算法测试、大型APP前后端测试、自动化测试、白盒测试、软件开发等经验的候选人优先考虑。",
-        "precedence": "",
-        "highLight": "1.团队拥有全面测试技术栈，包括持续交付体系、自动化测试体系、稳定性建设体系、测试环境建设体系等，有效保证研发效率和系统质量的稳步提升；\n2.团队业务具备复杂、多样的产品形态，工作中可接触前沿AI技术领域，可持续思考新环境下的测试工作如何更高效、智能化；\n3.团队拥有完善的培养机制，关注团队每个人的成长和能力提升，有开放的工作氛围，快乐、进取的团队文化。",
+        "departmentIntro": "美团的使命是“帮大家吃得更好，生活更好”，公司聚焦“零售 + 科技”战略，和广大商户与各类合作伙伴一起，努力为消费者提供品质生活，推动商品零售和服务零售在需求侧和供给侧的数字化转型。\n2018年9月20日，美团正式在港交所挂牌上市。美团将始终坚持以客户为中心，不断加大在科技研发方面的投入，更好承担社会责任，更多创造社会价值，与广大合作伙伴一起发展共赢。",
+        "jobDuty": "1. 负责餐饮 SaaS 相关业务的服务端、Web、移动应用以及相关硬件设备（如 POS、外设等）的测试工作，保障软硬件协同下的业务稳定性与交付质量。\n2. 深入理解业务流程和系统实现，识别高风险改动及易出问题的软硬件交互路径，基于变更影响和系统结构划定测试覆盖范围。\n3. 建设并维护服务端 / Web / App 自动化测试能力，并结合硬件特性开展专项测试，将有效的自动化测试稳定接入 CI/CD 流水线。\n4. 结合系统特点，开展必要的性能、容量、稳定性及异常场景测试，能够定位并推动解决关键问题。\n5. 以智能化思路执行测试工作，如测试设计、质量分析、多层级自动化测试的开发与管理、核心测试资产如通用测试模型、问题模式、回归策略等）的沉淀与闭环复用。。\n6. 在项目中承担技术骨干角色，推动测试方法和工程能力持续改进，并指导初中级测试同学完成复杂需求或专项工作。",
+        "jobRequirement": "1. 计算机或相关专业本科及以上学历，具备扎实的软件工程基础和系统性问题分析能力，能够在复杂系统中承担测试方案设计与关键问题定位工作。\n2. 具备良好的编程能力，熟悉 Java，掌握 Python 或 JavaScript，能够结合 AI Coding系列工具进行自动化测试的开发与维护。\n3. 熟悉接口、服务端、Web / App 等多方向的自动化测试实践，理解自动化测试在质量体系中的正确定位。\n4. 具备 CI/CD 实践经验，理解测试能力如何与流水线、发布流程和变更控制结合。\n5. 对软硬件协同场景下的系统测试有认知或实践经验，能够理解接口、设备与业务逻辑之间的协作关系。\n6. 具备测试知识沉淀和复用意识，能够将问题模式、测试策略或通用能力转化为可复用资产，并持续应用到工程实践中。\n7. 熟练应用Coding Agent等智能化手段，在日常测试工程中，优化改造传统软件交付流程。",
+        "precedence": "1. 有 SaaS / PaaS 系统测试经验，理解多租户、配置复杂、长期演进系统的质量特点。\n2. 有软硬件结合测试经验，如 POS、外设、IoT 设备等相关测试或联调经历。\n3. 参与过测试工具、测试平台或工程效率相关能力建设，并在团队内形成复用。\n4. 在实际工作中熟练应用Coding Agent等各类智能化工具，深入集成进测试设计、自动化测试或问题分析，不仅停留在概念层面。",
+        "highLight": "1. 面对多系统、多角色、高并发且长期演进的业务系统，涵盖软件系统与硬件设备协同的测试工作。\n2. 不仅限于功能验证，更关注系统稳定性、可演进性和长期质量问题。\n3. 以工程化方式应对复杂问题，持续建设自动化测试、软硬件联调、测试知识沉淀与智能化能力。",
         "otherInfo": null,
-        "firstPostTime": 1750316739000,
-        "refreshTime": 1774436419000,
+        "firstPostTime": 1773824494000,
+        "refreshTime": 1774434612000,
         "tag": null,
         "expiredTime": null,
         "socialRecommendJob": true
@@ -581,5 +717,4 @@
     "status": 1,
     "message": "成功"
 }
-
 job_url:https://zhaopin.meituan.com/web/position/detail?jobUnionId=3467972559&highlightType=social

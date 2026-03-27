@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import logging
 from datetime import datetime
 from copy import deepcopy
 from dataclasses import dataclass
@@ -31,7 +32,8 @@ REQUIRED_FIELDS = (
 @dataclass(slots=True)
 class ResponseConfig:
     code_field: str = "Code"
-    success_value: int = 200
+    success_value: Any = 200
+    success_values: Optional[List[Any]] = None
     data_path: Optional[str] = "Data"
     posts_path: Optional[str] = "Posts"
     count_path: Optional[str] = "Count"
@@ -53,10 +55,26 @@ class ConfigDrivenProvider(BaseProvider):
         detail_cfg = self.extra.get("detail", {})
         self._list_headers = self.extra.get("list_headers") or self.extra.get("headers")
         self._detail_headers = self.extra.get("detail_headers") or self.extra.get("headers")
+        raw_warmup_urls = self.extra.get("warmup_urls")
+        self._warmup_urls = [
+            str(item).strip()
+            for item in (raw_warmup_urls if isinstance(raw_warmup_urls, list) else [])
+            if str(item).strip()
+        ]
+        self._warmup_headers = self.extra.get("warmup_headers") or self._list_headers
+        preserve_fields = self.extra.get("preserve_empty_string_fields")
+        self._preserve_empty_string_fields = {
+            str(item).strip()
+            for item in (preserve_fields if isinstance(preserve_fields, list) else [])
+            if str(item).strip()
+        }
         self.url_templates: Dict[str, str] = self.extra.get("url_templates", {})
+        self.auto_category_mode: bool = bool(self.extra.get("auto_category_mode"))
+        self.category_rules = self._load_category_rules(self.extra.get("category_rules"))
         self.list_config = ResponseConfig(
             code_field=list_cfg.get("code_field", "Code"),
             success_value=list_cfg.get("success_value", 200),
+            success_values=list_cfg.get("success_values"),
             data_path=list_cfg.get("data_path", "Data"),
             posts_path=list_cfg.get("posts_path", "Posts"),
             count_path=list_cfg.get("count_path", "Count"),
@@ -70,8 +88,18 @@ class ConfigDrivenProvider(BaseProvider):
         self.detail_config = ResponseConfig(
             code_field=detail_cfg.get("code_field", "Code"),
             success_value=detail_cfg.get("success_value", 200),
+            success_values=detail_cfg.get("success_values"),
             data_path=detail_cfg.get("data_path", "Data"),
+            post_id_field=detail_cfg.get("post_id_field", "PostId"),
             timestamp_param=detail_cfg.get("timestamp_param", "timestamp"),
+        )
+        self._list_success_codes = self._normalize_success_values(
+            self.list_config.success_values,
+            self.list_config.success_value,
+        )
+        self._detail_success_codes = self._normalize_success_values(
+            self.detail_config.success_values,
+            self.detail_config.success_value,
         )
         self.field_map: Dict[str, str] = self.extra.get("field_map", {})
         self.default_values: Dict[str, Any] = self.extra.get("default_values", {})
@@ -82,19 +110,21 @@ class ConfigDrivenProvider(BaseProvider):
         return self._list_headers
 
     def build_list_params(self, category_id: str, page: int) -> Dict[str, Any]:  # type: ignore[override]
-        params = super().build_list_params(category_id, page)
-        params[self.list_config.page_param] = page
-        if self.list_config.size_param and self.list_config.size_param not in params and self.list_config.page_size:
-            params[self.list_config.size_param] = self.list_config.page_size
+        params = dict(self.list_endpoint.default_params)
+        if self.list_config.page_param:
+            self._assign_path(params, self.list_config.page_param, page)
+        if self.list_config.size_param and not self._has_path(params, self.list_config.size_param) and self.list_config.page_size:
+            self._assign_path(params, self.list_config.size_param, self.list_config.page_size)
         if self.list_config.category_param and category_id:
-            params[self.list_config.category_param] = category_id
+            self._assign_path(params, self.list_config.category_param, category_id)
         if self.list_config.timestamp_param:
-            params[self.list_config.timestamp_param] = self._current_timestamp()
-        return params
+            self._assign_path(params, self.list_config.timestamp_param, self._current_timestamp())
+        return self._prune_params(params)
 
     def parse_list_response(self, payload: Dict[str, Any], page: int) -> ListResult:  # type: ignore[override]
         code = self._resolve_path(payload, self.list_config.code_field)
-        if code != self.list_config.success_value:
+        if code not in self._list_success_codes:
+            logging.error("列表接口返回异常 code=%s payload=%s", code, payload)
             raise RuntimeError(f"列表接口返回异常 Code={code}")
         data = self._resolve_path(payload, self.list_config.data_path) or {}
         posts: List[Dict[str, Any]] = self._resolve_path(data, self.list_config.posts_path) or []
@@ -111,6 +141,19 @@ class ConfigDrivenProvider(BaseProvider):
         value = self._resolve_path(post, self.list_config.post_id_field)
         return str(value).strip() if value else None
 
+    def predict_job_url(self, post: Dict[str, Any]) -> Optional[str]:  # type: ignore[override]
+        template = self.url_templates.get("job_url")
+        if template:
+            rendered = self._render_template(template, post)
+            if rendered:
+                return rendered.strip() or None
+        path = self.field_map.get("job_url")
+        if not path:
+            return None
+        value = self._resolve_path(post, path)
+        text = self._stringify_value(value)
+        return text.strip() if text else None
+
     # ---- 详情阶段 ----
     def build_detail_params(self, post_id: str) -> Dict[str, Any]:  # type: ignore[override]
         params = dict(self.detail_endpoint.default_params)
@@ -120,14 +163,20 @@ class ConfigDrivenProvider(BaseProvider):
             params.pop("postId", None)
         if self.detail_config.timestamp_param:
             params[self.detail_config.timestamp_param] = self._current_timestamp()
-        return params
+        return self._prune_params(params)
 
     def detail_headers(self) -> Optional[Dict[str, str]]:  # type: ignore[override]
         return self._detail_headers
 
+    def warmup_urls(self) -> List[str]:  # type: ignore[override]
+        return list(self._warmup_urls)
+
+    def warmup_headers(self) -> Optional[Dict[str, str]]:  # type: ignore[override]
+        return self._warmup_headers
+
     def parse_detail_response(self, payload: Dict[str, Any]) -> Dict[str, Any]:  # type: ignore[override]
         code = self._resolve_path(payload, self.detail_config.code_field)
-        if code != self.detail_config.success_value:
+        if code not in self._detail_success_codes:
             raise RuntimeError(f"详情接口返回异常 Code={code}")
         data = self._resolve_path(payload, self.detail_config.data_path)
         if not data:
@@ -151,6 +200,7 @@ class ConfigDrivenProvider(BaseProvider):
             requirement=self._string_field(detail, "requirement"),
             bonus=self._string_field(detail, "bonus") or self.default_values.get("bonus"),
             work_experience=self._string_field(detail, "work_experience"),
+            is_deleted=0,
             crawl_status=1,
             crawled_at=crawled_at,
             created_at=None,
@@ -158,9 +208,30 @@ class ConfigDrivenProvider(BaseProvider):
         return self._apply_templates(record, detail)
 
     # ---- 工具方法 ----
+    def supports_auto_category(self) -> bool:  # type: ignore[override]
+        # 自动分类模式允许只依赖 default_category_id 兜底；category_rules 可选。
+        return self.auto_category_mode
+
+    def resolve_category_id(self, post: Dict[str, Any], detail: Dict[str, Any]) -> Optional[str]:  # type: ignore[override]
+        if not self.category_rules:
+            return None
+        context = self._merge_category_context(post, detail)
+        for rule in self.category_rules:
+            if self._category_rule_matches(rule, context):
+                return rule["category_id"]
+        return None
+
     @staticmethod
     def _current_timestamp() -> int:
         return int(datetime.utcnow().timestamp() * 1000)
+
+    def _merge_category_context(self, post: Optional[Dict[str, Any]], detail: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+        context: Dict[str, Any] = {}
+        if post:
+            context.update(post)
+        if detail:
+            context.update(detail)
+        return context
 
     def _resolve_path(self, payload: Optional[Dict[str, Any]], path: Optional[str]) -> Any:
         if payload is None or not path:
@@ -188,11 +259,45 @@ class ConfigDrivenProvider(BaseProvider):
             value = self.default_values.get(field_name)
         else:
             value = self._resolve_path(detail, path)
-        if value is None:
+        processed = self._stringify_value(value)
+        if processed is None:
             return None
         if field_name in _TEXT_FIELDS:
-            return str(value).strip()
-        return value
+            return processed
+        return processed
+
+    def _stringify_value(self, value: Any) -> Optional[str]:
+        if value is None:
+            return None
+        if isinstance(value, str):
+            text = value.strip()
+            return text or None
+        if isinstance(value, (int, float)):
+            return str(value)
+        if isinstance(value, list):
+            parts: List[str] = []
+            for item in value:
+                if isinstance(item, dict):
+                    candidate = item.get("name") or item.get("label") or item.get("value")
+                    part = self._stringify_value(candidate)
+                    if not part:
+                        part = self._stringify_value({k: v for k, v in item.items() if isinstance(v, (str, int, float))})
+                else:
+                    part = self._stringify_value(item)
+                if part:
+                    parts.append(part)
+            return " / ".join(parts) if parts else None
+        if isinstance(value, dict):
+            for candidate_key in ("name", "label", "value"):
+                candidate = value.get(candidate_key)
+                if candidate:
+                    part = self._stringify_value(candidate)
+                    if part:
+                        return part
+            text = str(value).strip()
+            return text or None
+        text = str(value).strip()
+        return text or None
 
     def _publish_time_field(self, detail: Dict[str, Any]) -> Optional[datetime]:
         raw_path = self.field_map.get("publish_time")
@@ -261,3 +366,89 @@ class ConfigDrivenProvider(BaseProvider):
             return [self._expand_env_vars(item) for item in value]
         return value
 
+    def _load_category_rules(self, raw_rules: Any) -> List[Dict[str, Any]]:
+        if not isinstance(raw_rules, list):
+            return []
+        normalized: List[Dict[str, Any]] = []
+        for index, rule in enumerate(raw_rules):
+            if not isinstance(rule, dict):
+                logging.warning("company %s 的 category_rules[%s] 不是对象，已跳过", self.company_id, index)
+                continue
+            category_id = str(rule.get("category_id", "")).strip()
+            match = rule.get("match")
+            if not category_id or not isinstance(match, dict) or not match:
+                logging.warning(
+                    "company %s 的 category_rules[%s] 缺少 category_id 或 match，已跳过",
+                    self.company_id,
+                    index,
+                )
+                continue
+            normalized.append({"category_id": category_id, "match": match})
+        return normalized
+
+    def _category_rule_matches(self, rule: Dict[str, Any], context: Dict[str, Any]) -> bool:
+        for path, expected in rule["match"].items():
+            actual = self._resolve_path(context, path)
+            if isinstance(expected, list):
+                candidates = [self._normalize_rule_value(item) for item in expected]
+                if self._normalize_rule_value(actual) not in candidates:
+                    return False
+                continue
+            if isinstance(expected, str):
+                if self._normalize_rule_value(actual) != expected.strip():
+                    return False
+                continue
+            if actual != expected:
+                return False
+        return True
+
+    @staticmethod
+    def _normalize_rule_value(value: Any) -> str:
+        return "" if value is None else str(value).strip()
+
+    @staticmethod
+    def _normalize_success_values(configured_values: Any, fallback_value: Any) -> set[Any]:
+        if isinstance(configured_values, list) and configured_values:
+            return set(configured_values)
+        return {fallback_value}
+
+    @staticmethod
+    def _assign_path(payload: Dict[str, Any], path: str, value: Any) -> None:
+        parts = [p for p in path.split(".") if p]
+        if not parts:
+            return
+        current: Dict[str, Any] = payload
+        for key in parts[:-1]:
+            existing = current.get(key)
+            if not isinstance(existing, dict):
+                existing = {}
+                current[key] = existing
+            current = existing
+        current[parts[-1]] = value
+
+    @staticmethod
+    def _has_path(payload: Dict[str, Any], path: str) -> bool:
+        parts = [p for p in path.split(".") if p]
+        if not parts:
+            return False
+        current: Any = payload
+        for key in parts:
+            if not isinstance(current, dict) or key not in current:
+                return False
+            current = current[key]
+        return True
+
+    def _prune_params(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        cleaned: Dict[str, Any] = {}
+        for key, value in params.items():
+            if value is None:
+                continue
+            if isinstance(value, str):
+                if not value.strip():
+                    if key in self._preserve_empty_string_fields:
+                        cleaned[key] = ""
+                    continue
+                cleaned[key] = value
+            else:
+                cleaned[key] = value
+        return cleaned

@@ -61,9 +61,10 @@ python main.py --rules rules/company.json [--env-file .env] [--dry-run]
 运行时交互步骤：
 1. 输入公司 ID（如 `C001`）。
 2. 选择招聘类型：`0` 社会招聘，`1` 校园招聘。
-3. 输入要抓取的分类 ID，逗号分隔或输入 `all` 全部分类。
-4. 输入每个分类抓取条数，数字或 `all`。
-5. 程序会在开抓前比较 `category.official_job_count` 与 `crawled_job_count`，若相等直接跳过该分类并给出提示；否则继续抓取。本轮抓取结束后会把 `official_job_count` 设置为“本次真实抓到的条数”，`crawled_job_count` 设置为数据库当前写入的条数。如发现数据库旧数据多于本轮抓到的条数，将先清空该分类的职位再重新写入，避免冗余数据。
+3. 选择爬取模式：`fast` 快爬，`slow` 慢爬。
+4. 输入要抓取的分类 ID，逗号分隔或输入 `all` 全部分类。
+5. 输入每个分类抓取条数，数字或 `all`。
+6. `fast` 模式会按 `official_job_count` 与 `crawled_job_count` 判断是否可跳过；`slow` 模式会先把岗位标记 `is_deleted=1`，抓取命中岗位回写 `is_deleted=0`，最后删除仍为 `1` 的旧岗位。
 
 常用参数：
 - `--env-file`: 指定自定义 env 文件。
@@ -82,8 +83,8 @@ python main.py --rules rules/company.json [--env-file .env] [--dry-run]
 {
   "company_id": "C001",
   "provider": "config",
-  "list_api": { "url": "https://...", "default_params": { ... } },
-  "detail_api": { "url": "https://...", "default_params": { ... } },
+  "list_api": { "url": "https://...", "method": "POST", "default_params": { ... } },
+  "detail_api": { "url": "https://...", "method": "GET", "default_params": { ... } },
   "throttle": { "min_seconds": 0.5, "max_seconds": 1.0, "max_retries": 3, "retry_backoff": 2.0, "timeout": 15 },
   "extra": {
     "list": { "posts_path": "Data.Posts", ... },
@@ -96,19 +97,29 @@ python main.py --rules rules/company.json [--env-file .env] [--dry-run]
 }
 ```
 
-- `list_api/detail_api`: 接口地址和基础参数。
+- `list_api/detail_api`: 接口地址、默认参数、可选 `method`（缺省为 `GET`，填 `POST` 时会自动以 JSON body 提交请求）。
 - `throttle`: 每次请求的最小/最大延迟、重试次数、退避系数、超时。
 - `extra.list/detail`: 描述 JSON 结构，决定如何解析列表与详情。
 - `field_map`: 详情 JSON 字段与 `JobRecord` 字段映射。
 - `default_values`: 字段缺失时的回退值。
 - `default_category_id`: 当数据库没有叶子分类时仍需写库的默认 DB 分类 ID。
 - `default_api_category_id`: 与上项配对的接口分类 ID，可根据官网实际格式填写。
+- `auto_category_mode`: 可选布尔值，开启后列表接口只请求一次，由 `category_rules` 自动将岗位归入不同分类，适用于像美团这样列表已有“岗位家族”字段的官网。
+- `category_rules`: 自动分类模式的匹配表，列表/详情 JSON 路径 → 分类 ID，可用字符串或数组匹配多个值；记得在数据库 `category` 表预先创建对应 `category_id`。
+- `job_type_overrides`: 以 `{"0": {...}, "1": {...}}` 形式为不同 `job_type` 指定专属 `list_api`/`detail_api`/`extra` 覆盖项（例如社招与校招接口、详情页模板不同）。若用户在 CLI 中输入对应 job_type，程序会自动套用这些覆盖配置。
+- `skip_detail_if_exists`: 可选布尔值，默认 `true`。开启时会在详情请求前根据列表项预测 `job_url`，若数据库已存在则直接跳过该职位，减少详情接口请求。
 - `headers/list_headers/detail_headers`: 可选 HTTP 头，支持 `${ENV_VAR}`。
+- `url_templates`: 可选模板，当前支持 `job_url`，可用 `{字段名}` 引用详情 JSON 字段（例如 `https://xxx/detail?id={jobUnionId}`）。
 - **示例条目说明**：`rules/company.json` 中的示例公司对象（`company_id` 为 `CXXX`）仅用于演示 JSON 结构，字段含义如下，可复制后编辑；若不需要也可以删除：
+  - `list_api/detail_api`：演示如何填写默认参数与接口地址；
+  - `throttle`：提供一个限流模板，可按需放宽或收紧；
+  - `extra.list/detail`：展示 JSON 路径写法（含列表、嵌套字段）；
+  - `field_map/default_values`：说明如何绑定字段和提供兜底值；
+  - 你可以将其复制为新条目，修改 `company_id`、接口地址等信息，也可以直接删除示例，仅保留真实配置。
 
 ## 日志与增量策略
 - HTTP 客户端自带节流及重试，若响应不是合法 JSON，会记录状态码与片段并重试。
-- `JobCrawler` 会统计每个分类成功/失败数量，并在 `dry-run` 模式下只打印 SQL；常规模式始终执行增量写库，对已存在且无变化的职位仅刷新抓取元数据，避免重复写入。同时会自动比较分类的官方数量与已爬数量，必要时跳过；若检测到数据库条数多于本轮抓到的条数，会先清空旧职位再重新落库，并在最后回写 `official_job_count` 与 `crawled_job_count`。职位重新写入时，`job_id` 生成器会优先填补删除后留下的空缺编号，只有在没有可复用编号时才继续递增，避免长期运行后编号溢出。
+- `JobCrawler` 会统计每个分类成功/失败数量，并在 `dry-run` 模式下只打印 SQL；常规模式执行增量写库时，若 `job_url` 已存在则直接跳过该职位，避免重复请求详情和重复写入。慢爬模式通过 `is_deleted` 软删除收敛：先标记、命中岗位复活、最后删除未命中的历史职位。
 
 ## 常见问题
 - **ModuleNotFoundError: crawler**：请确认从仓库根目录运行 `pytest` 或 `python main.py`，测试已在 `tests/conftest.py` 中处理路径。
@@ -132,6 +143,8 @@ python tools/rules_frontend_server.py --host 127.0.0.1 --port 8000
 ```
 
 打开 `http://127.0.0.1:8000/` 后即可查看规则列表、编辑字段或新增规则，保存时会触发 JSON Schema 校验并同步到文件。
+
+> 📌 **美团（company_id = C007）接入说明**：默认以 `auto_category_mode` 拉取全量岗位，并根据 `jobFamily`/`jobFamilyGroup` 自动分类。你只需在数据库 `category` 表补齐 `C007DEFAULT` 及 `category_rules` 中列出的 `category_id`，后续若要拓展分类，新增规则即可，无需再改代码。
 
 - **规则校验**：修改 `rules/company.json` 后，建议先通过 Schema 校验快速发现缺失字段或格式问题。
 

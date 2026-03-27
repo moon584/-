@@ -33,6 +33,7 @@ class JobRecord:
     requirement: Optional[str]
     bonus: Optional[str]
     work_experience: Optional[str]
+    is_deleted: int
     crawl_status: int
     crawled_at: datetime
     created_at: Optional[datetime]
@@ -53,6 +54,7 @@ class JobRecord:
             "requirement": self.requirement,
             "bonus": self.bonus,
             "work_experience": self.work_experience,
+            "is_deleted": self.is_deleted,
             "crawl_status": self.crawl_status,
             "crawled_at": self.crawled_at,
             "created_at": self.created_at,

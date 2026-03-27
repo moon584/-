@@ -51,6 +51,7 @@ CREATE TABLE `job` (
     `requirement` TEXT COMMENT '职位任职要求',
     `bonus` TEXT COMMENT '加分项（优先资格、额外要求等）',
     `work_experience` VARCHAR(100) DEFAULT NULL COMMENT '工作经验要求（如一年以上工作经验）',
+    `is_deleted` TINYINT UNSIGNED NOT NULL DEFAULT 0 COMMENT '待删除标记：0=正常，1=待删除',
     `crawl_status` TINYINT UNSIGNED NOT NULL DEFAULT 1 COMMENT '爬取状态：0=失败，1=成功',
     `crawled_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '爬取时间/入库时间',
     `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '记录创建时间',
@@ -60,8 +61,10 @@ CREATE TABLE `job` (
     KEY `idx_category_id` (`category_id`),
     KEY `idx_publish_time` (`publish_time`),
     KEY `idx_location` (`location`),
+    KEY `idx_is_deleted` (`is_deleted`),
     KEY `idx_job_type` (`job_type`),
     KEY `idx_crawl_status` (`crawl_status`),
+    CONSTRAINT `chk_job_is_deleted` CHECK (`is_deleted` IN (0,1)),
     CONSTRAINT `fk_job_company` FOREIGN KEY (`company_id`) REFERENCES `company` (`id`) ON DELETE RESTRICT ON UPDATE CASCADE,
     CONSTRAINT `fk_job_category` FOREIGN KEY (`category_id`) REFERENCES `category` (`id`) ON DELETE RESTRICT ON UPDATE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='职位信息表';
